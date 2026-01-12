@@ -179,11 +179,30 @@ class WebRTCReceiver:
             if not url.startswith('rtmp://'):
                 raise ValueError(f"Invalid RTMP URL format: {url}")
             
+            # High-quality encoding options for RTMP/FLV
+            # FLV is still the standard for RTMP, but we optimize for quality
             recorder = MediaRecorder(url, format='flv', options={
+                # Video encoding (H.264)
+                'preset': 'veryfast',           # Balance speed/quality (veryfast, faster, fast, medium, slow)
+                'tune': 'zerolatency',          # Optimize for live streaming
+                'video_bitrate': '6000k',       # 6 Mbps for high quality
+                'maxrate': '6000k',
+                'bufsize': '12000k',            # 2x bitrate for buffer
+                'g': '60',                      # GOP size (keyframe interval)
+                'bf': '0',                      # No B-frames for lower latency
+                'profile:v': 'high',            # H.264 High Profile
+                'level': '4.1',                 # H.264 Level 4.1 (supports 1080p@30fps)
+                
+                # Audio encoding (AAC)
+                'audio_bitrate': '256k',        # High quality audio
+                'ar': '48000',                  # 48kHz sample rate
+                
+                # Container/muxer options
                 'max_interleave_delta': '0',
                 'fflags': '+genpts',
-                'rtmp_buffer': '100',
+                'rtmp_buffer': '1000',          # Larger buffer for stability
                 'rtmp_live': 'live',
+                'rtmp_playpath': 'live',
             })
             
             # Add all existing tracks
