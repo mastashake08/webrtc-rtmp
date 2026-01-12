@@ -72,11 +72,11 @@ class PeerJSClient:
         elif msg_type == "OFFER":
             # Received an offer from remote peer
             payload = data.get("payload", {})
-            sdp = payload.get("sdp")
             logger.debug(f"Offer payload: {payload}")
-            if sdp and self.on_offer:
+            if payload and self.on_offer:
                 logger.info(f"Received offer from peer: {data.get('src')}")
-                await self.on_offer(sdp, data.get('src'))
+                # Pass the entire payload (includes connectionId, sdp, type, metadata)
+                await self.on_offer(payload, data.get('src'))
                 
         elif msg_type == "ANSWER":
             # Received an answer from remote peer
@@ -103,18 +103,24 @@ class PeerJSClient:
         else:
             logger.debug(f"Unhandled message type: {msg_type}")
     
-    async def send_answer(self, answer_sdp: dict, dst_peer_id: str):
+    async def send_answer(self, answer_sdp: dict, dst_peer_id: str, connection_id: str = None):
         """Send answer SDP to remote peer"""
+        # answer_sdp is already a dict like {"type": "answer", "sdp": "v=0..."}
+        # Build payload - include connectionId for proper PeerJS routing
+        payload = {"sdp": answer_sdp}
+        
+        if connection_id:
+            payload["connectionId"] = connection_id
+            payload["type"] = "media"  # Mark as media connection
+        
         message = {
             "type": "ANSWER",
             "dst": dst_peer_id,
-            "payload": {
-                "sdp": answer_sdp,
-                "type": "answer"
-            }
+            "payload": payload
         }
         await self.ws.send(json.dumps(message))
         logger.info(f"Sent answer to peer: {dst_peer_id}")
+        logger.debug(f"Answer payload: {payload}")
     
     async def send_candidate(self, candidate: dict, dst_peer_id: str):
         """Send ICE candidate to remote peer"""

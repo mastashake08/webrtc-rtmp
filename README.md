@@ -29,8 +29,38 @@ You'll get a Peer ID like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`. Share this wit
 ### Docker Compose
 
 ```bash
-# Start bridge and NGINX RTMP server
-docker-compose up --build
+# Start bridge, NGINX RTMP server, and stunnel for RTMPS
+docker-compose up -d
+```
+
+The Docker setup includes:
+- **Stunnel**: TLS proxy for RTMPS forwarding (Facebook, YouTube on port 443)
+- **NGINX RTMP**: Local RTMP server with stats at http://localhost:8080/stat
+- **WebRTC Bridge**: Python bridge for receiving WebRTC streams
+
+**RTMPS Support via Stunnel:**
+
+The stack now supports RTMPS! Stream format in your dashboard:
+
+**Facebook Live:**
+```
+rtmp://nginx-rtmp:1935/facebook/FB-YOUR-STREAM-KEY
+```
+
+**YouTube:**
+```
+rtmp://nginx-rtmp:1935/youtube/YOUR-STREAM-KEY
+```
+
+**How it works:**
+1. WebRTC bridge sends to NGINX RTMP (port 1935)
+2. NGINX forwards to stunnel (internal ports 1936/1937)
+3. Stunnel wraps in TLS and forwards to platform RTMPS endpoints (port 443)
+
+For direct RTMP without TLS, use standard URLs:
+```
+rtmp://live-api-s.facebook.com:80/rtmp/YOUR_KEY
+rtmp://a.rtmp.youtube.com/live2/YOUR_KEY
 ```
 
 ### Manual Signaling Mode

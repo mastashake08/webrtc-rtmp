@@ -1,19 +1,50 @@
 version: '3.8'
 
 services:
+  # Stunnel for RTMPS (RTMP over TLS) forwarding
+  stunnel:
+    image: dweomer/stunnel
+    container_name: stunnel-rtmps
+    volumes:
+      - ./stunnel.conf:/etc/stunnel/stunnel.conf:ro
+    networks:
+      - rtmp-network
+    restart: unless-stopped
+
+  # NGINX RTMP server with stunnel forwarding
+  nginx-rtmp:
+    image: tiangolo/nginx-rtmp
+    container_name: nginx-rtmp
+    ports:
+      - "1935:1935"  # RTMP input from WebRTC bridge
+      - "8080:8080"  # Stats page
+    volumes:
+      - ./nginx-rtmp.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - rtmp-network
+    depends_on:
+      - stunnel
+    restart: unless-stopped
+
+  # WebRTC to RTMP bridge
   webrtc-rtmp-bridge:
     build: .
     container_name: webrtc-rtmp-bridge
     stdin_open: true
     tty: true
     environment:
-      - RTMP_URL=rtmp://your-rtmp-server:1935/live/stream
       - PEERJS_MODE=true
     # PeerJS mode (automatic signaling)
-    command: python main.py --peerjs --rtmp-url $${RTMP_URL}
-    # Manual mode (file-based signaling)
-    # command: python main.py --rtmp-url $${RTMP_URL} --offer-file /app/offer.json
-    # volumes:
-    #   - ./offer.json:/app/offer.json:ro
-    network_mode: host
+    # Bridge streams to NGINX, which forwards to stunnel for RTMPS
+    command: python main.py --peerjs
+    networks:
+      - rtmp-network
+    depends_on:
+      - nginx-rtmp
+      - stunnel
+    restart: unless-stopped
+
+networks:
+  rtmp-network:
+    driver: bridge
 

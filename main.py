@@ -12,13 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 class WebRTCReceiver:
-    def __init__(self, rtmp_url=None):
+    def __init__(self, rtmp_url=None, peerjs_client=None, get_remote_peer_id=None):
         self.pc = RTCPeerConnection()
         self.rtmp_urls = [rtmp_url] if rtmp_url else []
         self.recorders = {}  # {rtmp_url: MediaRecorder}
         self.tracks = []
         self.recording_started = False
         self.datachannel = None
+        self.peerjs_client = peerjs_client
+        self.get_remote_peer_id = get_remote_peer_id
         
     async def setup(self):
         """Setup peer connection event handlers"""
@@ -37,15 +39,12 @@ class WebRTCReceiver:
             logger.info(f"Receiving {track.kind} track")
             self.tracks.append(track)
             
-            # Add track to all active recorders
-            for rtmp_url, recorder in self.recorders.items():
-                if recorder:
-                    recorder.addTrack(track)
-                    logger.info(f"Added {track.kind} track to {rtmp_url}")
-            
-            # Start recorders if we have RTMP URLs and haven't started yet
-            if self.rtmp_urls and not self.recording_started:
-                await self.start_recording()
+            # If recording is already started, add track to active recorders
+            if self.recording_started:
+                for rtmp_url, recorder in self.recorders.items():
+                    if recorder:
+                        recorder.addTrack(track)
+                        logger.info(f"Added {track.kind} track to {rtmp_url}")
             
             @track.on("ended")
             async def on_ended():
@@ -63,6 +62,18 @@ class WebRTCReceiver:
             logger.info(f"Connection state: {self.pc.connectionState}")
             if self.pc.connectionState == "failed":
                 await self.pc.close()
+        
+        @self.pc.on("icecandidate")
+        async def on_icecandidate(candidate):
+            # Send ICE candidates to remote peer via PeerJS
+            if candidate and self.peerjs_client and self.get_remote_peer_id:
+                remote_id = self.get_remote_peer_id()
+                if remote_id:
+                    await self.peerjs_client.send_candidate({
+                        "candidate": candidate.candidate,
+                        "sdpMid": candidate.sdpMid,
+                        "sdpMLineIndex": candidate.sdpMLineIndex
+                    }, remote_id)
     
     async def handle_command(self, message):
         """Handle data channel commands"""
@@ -227,20 +238,25 @@ class WebRTCReceiver:
             logger.warning("⚠️  Make sure your sender is sharing getUserMedia() tracks, not just datachannel")
             # Still process it to be polite, but no media will flow
         
+        # Set remote description - aiortc will automatically create matching transceivers
         await self.pc.setRemoteDescription(offer)
         
-        # Add receive-only transceivers if not already present
-        # This signals to the sender that we only want to receive media
-        has_audio = any(t.kind == "audio" for t in self.pc.getTransceivers())
-        has_video = any(t.kind == "video" for t in self.pc.getTransceivers())
+        # Create data channel for commands
+        self.datachannel = self.pc.createDataChannel("commands")
+        logger.info(f"Created data channel: {self.datachannel.label}")
         
-        if not has_audio and "m=audio" in offer.sdp:
-            self.pc.addTransceiver("audio", direction="recvonly")
-            logger.debug("Added recvonly audio transceiver")
-            
-        if not has_video and "m=video" in offer.sdp:
-            self.pc.addTransceiver("video", direction="recvonly")
-            logger.debug("Added recvonly video transceiver")
+        # Set up data channel handlers
+        @self.datachannel.on("open")
+        async def on_open():
+            logger.info("Data channel opened!")
+        
+        @self.datachannel.on("message")
+        async def on_message(message):
+            await self.handle_command(message)
+        
+        @self.datachannel.on("close")
+        async def on_close():
+            logger.info("Data channel closed")
         
         # Create answer
         answer = await self.pc.createAnswer()
@@ -287,7 +303,7 @@ class WebRTCReceiver:
 
 async def main_peerjs(rtmp_url, peer_id=None, peerjs_host="0.peerjs.com", peerjs_port=443):
     """Run in PeerJS mode - connect to PeerJS server and wait for connections"""
-    receiver = WebRTCReceiver(rtmp_url)
+    receiver = None
     peerjs = PeerJSClient(
         host=peerjs_host,
         port=peerjs_port,
@@ -298,40 +314,57 @@ async def main_peerjs(rtmp_url, peer_id=None, peerjs_host="0.peerjs.com", peerjs
     remote_peer_id = None
     
     # Handle incoming offers
-    async def handle_offer(sdp, src_peer_id):
-        nonlocal remote_peer_id
+    async def handle_offer(payload, src_peer_id):
+        nonlocal remote_peer_id, receiver
         remote_peer_id = src_peer_id
         
         logger.info(f"Processing offer from peer: {src_peer_id}")
-        logger.debug(f"Offer type: {type(sdp)}, keys: {sdp.keys() if isinstance(sdp, dict) else 'N/A'}")
+        logger.debug(f"Offer payload type: {type(payload)}, keys: {payload.keys() if isinstance(payload, dict) else 'N/A'}")
         
-        # Ensure sdp is in the correct format
-        if not isinstance(sdp, dict):
-            logger.error(f"Invalid SDP format: {sdp}")
+        # Ensure payload is in the correct format
+        if not isinstance(payload, dict):
+            logger.error(f"Invalid payload format: {payload}")
             return
+        
+        # Extract SDP and connectionId from payload
+        sdp = payload.get('sdp')
+        connection_id = payload.get('connectionId')
+        
+        if not sdp:
+            logger.error(f"No SDP in payload: {payload}")
+            return
+        
+        logger.debug(f"Connection ID: {connection_id}")
+        
+        # Close previous receiver if it exists
+        if receiver is not None:
+            logger.info("Closing previous peer connection")
+            await receiver.close()
+        
+        # Create new receiver for this offer
+        receiver = WebRTCReceiver(
+            rtmp_url=rtmp_url,
+            peerjs_client=peerjs,
+            get_remote_peer_id=lambda: remote_peer_id
+        )
             
         # Process offer and create answer
-        answer = await receiver.receive_offer(sdp)
-        await peerjs.send_answer(answer, src_peer_id)
+        answer_sdp = await receiver.receive_offer(sdp)
+        
+        # Send answer with connectionId preserved for PeerJS routing
+        await peerjs.send_answer(answer_sdp, src_peer_id, connection_id)
         logger.info("Answer sent successfully")
         
     # Handle incoming ICE candidates
     async def handle_candidate(candidate, src_peer_id):
-        await receiver.add_ice_candidate(candidate)
+        if receiver is not None:
+            await receiver.add_ice_candidate(candidate)
+        else:
+            logger.warning("Received ICE candidate but no receiver exists yet")
     
     # Set up handlers
     peerjs.on_offer = handle_offer
     peerjs.on_candidate = handle_candidate
-    
-    # Also send our ICE candidates to remote peer
-    @receiver.pc.on("icecandidate")
-    async def on_icecandidate(candidate):
-        if candidate and remote_peer_id:
-            await peerjs.send_candidate({
-                "candidate": candidate.candidate,
-                "sdpMid": candidate.sdpMid,
-                "sdpMLineIndex": candidate.sdpMLineIndex
-            }, remote_peer_id)
     
     try:
         await peerjs.connect()
@@ -341,12 +374,15 @@ async def main_peerjs(rtmp_url, peer_id=None, peerjs_host="0.peerjs.com", peerjs
         print("Waiting for connections... (Press Ctrl+C to stop)\n")
         
         # Keep running until interrupted
-        while receiver.pc.connectionState != "closed":
+        while True:
             await asyncio.sleep(1)
-            # Exit if all tracks ended and recorders stopped
-            if len(receiver.tracks) == 0 and receiver.recording_started is False and len(receiver.recorders) > 0:
-                logger.info("Stream ended")
-                break
+            # Exit if receiver exists and stream ended
+            if receiver is not None:
+                if receiver.pc.connectionState == "closed":
+                    break
+                if len(receiver.tracks) == 0 and receiver.recording_started is False and len(receiver.recorders) > 0:
+                    logger.info("Stream ended")
+                    break
                 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
@@ -354,7 +390,8 @@ async def main_peerjs(rtmp_url, peer_id=None, peerjs_host="0.peerjs.com", peerjs
         logger.error(f"Error: {e}", exc_info=True)
     finally:
         await peerjs.close()
-        await receiver.close()
+        if receiver is not None:
+            await receiver.close()
 
 
 async def main(rtmp_url, offer_file):
