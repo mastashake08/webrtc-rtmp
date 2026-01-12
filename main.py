@@ -15,6 +15,8 @@ class WebRTCReceiver:
         self.pc = RTCPeerConnection()
         self.rtmp_url = rtmp_url
         self.recorder = None
+        self.tracks = []
+        self.recording_started = False
         
     async def setup(self):
         """Setup peer connection event handlers"""
@@ -22,6 +24,7 @@ class WebRTCReceiver:
         @self.pc.on("track")
         async def on_track(track):
             logger.info(f"Receiving {track.kind} track")
+            self.tracks.append(track)
             
             if self.recorder is None:
                 # Initialize recorder with RTMP output
@@ -29,11 +32,28 @@ class WebRTCReceiver:
                 
             # Add track to recorder
             self.recorder.addTrack(track)
-            await self.recorder.start()
+            
+            # Start recorder only once when we have tracks
+            if not self.recording_started:
+                await self.recorder.start()
+                self.recording_started = True
+                logger.info("Started recording to RTMP")
             
             @track.on("ended")
             async def on_ended():
                 logger.info(f"Track {track.kind} ended")
+                if track in self.tracks:
+                    self.tracks.remove(track)
+                
+                # Stop recording when all tracks have ended
+                if len(self.tracks) == 0 and self.recorder:
+                    logger.info("All tracks ended, stopping recorder")
+                    await self.recorder.stop()
+          Add receive-only transceivers for audio and video
+        self.pc.addTransceiver("audio", direction="recvonly")
+        self.pc.addTransceiver("video", direction="recvonly")
+        
+        #           self.recording_started = False
                 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
@@ -67,9 +87,14 @@ class WebRTCReceiver:
                 sdpMid=candidate_data.get("sdpMid"),
                 sdpMLineIndex=candidate_data.get("sdpMLineIndex")
             )
-            await self.pc.addIceCandidate(candidate)
-            
-    async def close(self):
+            await self.p and self.recording_started:
+            try:
+                await self.recorder.stop()
+                logger.info("Recorder stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping recorder: {e}")
+        await self.pc.close()
+        logger.info("Peer connection closed"
         """Close connections"""
         if self.recorder:
             await self.recorder.stop()
@@ -113,11 +138,16 @@ async def main(rtmp_url):
                 candidate = json.loads(line)
                 await receiver.add_ice_candidate(candidate)
                 logger.info("Added ICE candidate")
-            except json.JSONDecodeError:
-                logger.warning("Invalid ICE candidate JSON")
-        
-        print("\nWaiting for stream... (Press Ctrl+C to stop)")
-        
+            except jso until connection closes or user interrupts
+        try:
+            while receiver.pc.connectionState != "closed":
+                await asyncio.sleep(1)
+                # Exit if all tracks ended and recorder stopped
+                if len(receiver.tracks) == 0 and receiver.recording_started is False and receiver.recorder is not None:
+                    logger.info("Stream ended, exiting")
+                    break
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
         # Keep running
         try:
             await asyncio.sleep(3600)  # Run for 1 hour max
