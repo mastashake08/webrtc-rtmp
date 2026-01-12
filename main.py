@@ -163,7 +163,10 @@ class WebRTCReceiver:
     async def _start_recorder(self, url):
         """Start a single recorder for a URL"""
         try:
-            recorder = MediaRecorder(url, format='flv')
+            recorder = MediaRecorder(url, format='flv', options={
+                'max_interleave_delta': '0',
+                'fflags': '+genpts',
+            })
             
             # Add all existing tracks
             for track in self.tracks:
@@ -471,8 +474,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WebRTC to RTMP Bridge")
     parser.add_argument(
         "--rtmp-url",
-        default="rtmp://localhost/live/stream",
-        help="RTMP output URL (default: rtmp://localhost/live/stream)"
+        default=None,
+        help="RTMP output URL (optional, can be added via data channel commands)"
     )
     parser.add_argument(
         "--peerjs",
