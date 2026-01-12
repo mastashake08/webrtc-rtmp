@@ -12,33 +12,40 @@ logger = logging.getLogger(__name__)
 
 
 class WebRTCReceiver:
-    def __init__(self, rtmp_url):
+    def __init__(self, rtmp_url=None):
         self.pc = RTCPeerConnection()
-        self.rtmp_url = rtmp_url
-        self.recorder = None
+        self.rtmp_urls = [rtmp_url] if rtmp_url else []
+        self.recorders = {}  # {rtmp_url: MediaRecorder}
         self.tracks = []
         self.recording_started = False
+        self.datachannel = None
         
     async def setup(self):
         """Setup peer connection event handlers"""
+        
+        @self.pc.on("datachannel")
+        async def on_datachannel(channel):
+            logger.info(f"Data channel opened: {channel.label}")
+            self.datachannel = channel
+            
+            @channel.on("message")
+            async def on_message(message):
+                await self.handle_command(message)
         
         @self.pc.on("track")
         async def on_track(track):
             logger.info(f"Receiving {track.kind} track")
             self.tracks.append(track)
             
-            if self.recorder is None:
-                # Initialize recorder with RTMP output (use flv format for RTMP)
-                self.recorder = MediaRecorder(self.rtmp_url, format='flv')
-                
-            # Add track to recorder
-            self.recorder.addTrack(track)
+            # Add track to all active recorders
+            for rtmp_url, recorder in self.recorders.items():
+                if recorder:
+                    recorder.addTrack(track)
+                    logger.info(f"Added {track.kind} track to {rtmp_url}")
             
-            # Start recorder only once when we have tracks
-            if not self.recording_started:
-                await self.recorder.start()
-                self.recording_started = True
-                logger.info("Started recording to RTMP")
+            # Start recorders if we have RTMP URLs and haven't started yet
+            if self.rtmp_urls and not self.recording_started:
+                await self.start_recording()
             
             @track.on("ended")
             async def on_ended():
@@ -47,20 +54,164 @@ class WebRTCReceiver:
                     self.tracks.remove(track)
                 
                 # Stop recording when all tracks have ended
-                if len(self.tracks) == 0 and self.recorder:
-                    logger.info("All tracks ended, stopping recorder")
-                    await self.recorder.stop()
-          #Add receive-only transceivers for audio and video
-        self.pc.addTransceiver("audio", direction="recvonly")
-        self.pc.addTransceiver("video", direction="recvonly")
-        
-        #           self.recording_started = False
+                if len(self.tracks) == 0:
+                    logger.info("All tracks ended, stopping all recorders")
+                    await self.stop_recording()
                 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
             logger.info(f"Connection state: {self.pc.connectionState}")
             if self.pc.connectionState == "failed":
                 await self.pc.close()
+    
+    async def handle_command(self, message):
+        """Handle data channel commands"""
+        try:
+            cmd = json.loads(message)
+            action = cmd.get("action")
+            
+            logger.info(f"Received command: {action}")
+            
+            if action == "start":
+                await self.start_recording()
+                self.send_response({"status": "ok", "action": "start", "urls": self.rtmp_urls})
+                
+            elif action == "stop":
+                await self.stop_recording()
+                self.send_response({"status": "ok", "action": "stop"})
+                
+            elif action == "add_url":
+                url = cmd.get("url")
+                if url:
+                    await self.add_rtmp_url(url)
+                    self.send_response({"status": "ok", "action": "add_url", "url": url})
+                else:
+                    self.send_response({"status": "error", "message": "URL required"})
+                    
+            elif action == "remove_url":
+                url = cmd.get("url")
+                if url:
+                    await self.remove_rtmp_url(url)
+                    self.send_response({"status": "ok", "action": "remove_url", "url": url})
+                else:
+                    self.send_response({"status": "error", "message": "URL required"})
+                    
+            elif action == "list_urls":
+                self.send_response({"status": "ok", "urls": self.rtmp_urls})
+                
+            elif action == "status":
+                self.send_response({
+                    "status": "ok",
+                    "recording": self.recording_started,
+                    "urls": self.rtmp_urls,
+                    "tracks": len(self.tracks),
+                    "active_recorders": len(self.recorders)
+                })
+            else:
+                self.send_response({"status": "error", "message": f"Unknown action: {action}"})
+                
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON command: {message}")
+            self.send_response({"status": "error", "message": "Invalid JSON"})
+        except Exception as e:
+            logger.error(f"Error handling command: {e}", exc_info=True)
+            self.send_response({"status": "error", "message": str(e)})
+    
+    def send_response(self, response):
+        """Send response back through data channel"""
+        if self.datachannel and self.datachannel.readyState == "open":
+            self.datachannel.send(json.dumps(response))
+            logger.debug(f"Sent response: {response}")
+    
+    async def add_rtmp_url(self, url):
+        """Add a new RTMP URL for multistreaming"""
+        if url not in self.rtmp_urls:
+            self.rtmp_urls.append(url)
+            logger.info(f"Added RTMP URL: {url}")
+            
+            # If already recording, start recorder for this URL
+            if self.recording_started and self.tracks:
+                await self._start_recorder(url)
+    
+    async def remove_rtmp_url(self, url):
+        """Remove an RTMP URL"""
+        if url in self.rtmp_urls:
+            self.rtmp_urls.remove(url)
+            
+            # Stop and remove recorder for this URL
+            if url in self.recorders:
+                recorder = self.recorders[url]
+                if recorder:
+                    try:
+                        await recorder.stop()
+                        logger.info(f"Stopped recorder for {url}")
+                    except Exception as e:
+                        logger.warning(f"Error stopping recorder for {url}: {e}")
+                del self.recorders[url]
+    
+    async def _start_recorder(self, url):
+        """Start a single recorder for a URL"""
+        try:
+            recorder = MediaRecorder(url, format='flv')
+            
+            # Add all existing tracks
+            for track in self.tracks:
+                recorder.addTrack(track)
+            
+            await recorder.start()
+            self.recorders[url] = recorder
+            logger.info(f"✓ Started recording to {url}")
+            
+        except Exception as e:
+            logger.error(f"✗ Failed to start recorder for {url}: {e}")
+            self.send_response({"status": "error", "message": f"Failed to start {url}: {str(e)}"})
+    
+    async def start_recording(self):
+        """Start recording to all RTMP URLs"""
+        if not self.rtmp_urls:
+            logger.warning("No RTMP URLs configured")
+            return
+            
+        if self.recording_started:
+            logger.info("Recording already started")
+            return
+        
+        logger.info(f"Starting recording to {len(self.rtmp_urls)} destination(s)")
+        
+        # Start all recorders in parallel
+        tasks = [self._start_recorder(url) for url in self.rtmp_urls]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        self.recording_started = True
+        logger.info(f"Recording started to {len(self.recorders)} destination(s)")
+    
+    async def stop_recording(self):
+        """Stop all recorders"""
+        if not self.recording_started:
+            logger.info("Recording not started")
+            return
+        
+        logger.info(f"Stopping {len(self.recorders)} recorder(s)")
+        
+        # Stop all recorders in parallel
+        tasks = []
+        for url, recorder in list(self.recorders.items()):
+            if recorder:
+                tasks.append(self._stop_recorder_safe(url, recorder))
+        
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        self.recorders.clear()
+        self.recording_started = False
+        logger.info("All recorders stopped")
+    
+    async def _stop_recorder_safe(self, url, recorder):
+        """Safely stop a recorder with error handling"""
+        try:
+            await recorder.stop()
+            logger.info(f"✓ Stopped recorder for {url}")
+        except Exception as e:
+            logger.warning(f"✗ Error stopping recorder for {url}: {e}")
                 
     async def receive_offer(self, offer_sdp):
         """Process incoming offer and create answer"""
@@ -78,7 +229,20 @@ class WebRTCReceiver:
         
         await self.pc.setRemoteDescription(offer)
         
-        # Create answer (transceivers already defined by the offer)
+        # Add receive-only transceivers if not already present
+        # This signals to the sender that we only want to receive media
+        has_audio = any(t.kind == "audio" for t in self.pc.getTransceivers())
+        has_video = any(t.kind == "video" for t in self.pc.getTransceivers())
+        
+        if not has_audio and "m=audio" in offer.sdp:
+            self.pc.addTransceiver("audio", direction="recvonly")
+            logger.debug("Added recvonly audio transceiver")
+            
+        if not has_video and "m=video" in offer.sdp:
+            self.pc.addTransceiver("video", direction="recvonly")
+            logger.debug("Added recvonly video transceiver")
+        
+        # Create answer
         answer = await self.pc.createAnswer()
         await self.pc.setLocalDescription(answer)
         
@@ -100,12 +264,7 @@ class WebRTCReceiver:
             
     async def close(self):
         """Close connections"""
-        if self.recorder and self.recording_started:
-            try:
-                await self.recorder.stop()
-                logger.info("Recorder stopped")
-            except Exception as e:
-                logger.warning(f"Error stopping recorder: {e}")
+        await self.stop_recording()
         await self.pc.close()
         logger.info("Peer connection closed")
 
