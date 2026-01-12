@@ -1,46 +1,62 @@
 # WebRTC to RTMP Bridge
 
-A Python-based streaming bridge that receives WebRTC streams and forwards them to RTMP endpoints using `aiortc`. Supports PeerJS signaling, data channel control, and multistreaming to multiple RTMP destinations simultaneously.
+High-performance Python streaming bridge that receives WebRTC streams and forwards them to RTMP/RTMPS endpoints. Built with `aiortc` and `PyAV` for professional-quality multicast streaming.
 
 ## Features
 
-- **PeerJS Signaling**: Automatic WebSocket-based signaling via PeerJS server (no manual SDP copy/paste!)
-- **Manual Signaling**: CLI-based SDP offer/answer exchange for custom setups
-- **Data Channel Control**: Remote control via WebRTC data channels (start/stop, add/remove RTMP URLs)
-- **Multistreaming**: Stream to multiple RTMP destinations simultaneously (YouTube, Twitch, Facebook, etc.)
-- **Async Recording**: Each RTMP destination runs independently in parallel
-- **Auto-shutdown**: Gracefully stops when all media tracks end
-- **Docker Support**: Includes NGINX RTMP server for testing
+- **PeerJS Signaling**: Automatic WebSocket-based signaling (no manual SDP exchange)
+- **Data Channel Control**: Real-time control via WebRTC data channels
+- **Multistreaming**: Stream to unlimited RTMP destinations simultaneously
+- **HD Video Processing**: High-quality H.264 encoding with AAC audio
+- **RTMPS Support**: Secure streaming via stunnel TLS proxy
+- **Docker Stack**: Complete NGINX RTMP + stunnel infrastructure
+- **Dynamic URL Management**: Add/remove destinations during live streaming
+- **Auto-shutdown**: Graceful cleanup when streams end
+
+## Video Quality Settings
+
+- **Video Codec**: H.264 High Profile Level 4.1
+- **Video Bitrate**: 6 Mbps (1080p streaming)
+- **Preset**: `veryfast` (optimized for live streaming)
+- **GOP Size**: 60 frames (2 second keyframe interval)
+- **Audio Codec**: AAC @ 256k, 48kHz stereo
+- **Container**: FLV (standard for RTMP)
 
 ## Quick Start
 
-### PeerJS Mode (Recommended)
+### Standalone Mode (Direct RTMP)
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Run with PeerJS signaling
-python main.py --peerjs --rtmp-url rtmp://localhost:1935/live/stream
+# Run bridge (no default URL - add via data channel)
+python main.py --peerjs
 ```
 
-You'll get a Peer ID like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`. Share this with your sender, and they can connect automatically - no manual SDP exchange needed!
+**Output:**
+```
+Connected! Your Peer ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
 
-### Docker Compose
+Share this Peer ID with your browser client to connect.
+
+### Docker Compose (RTMPS Support)
 
 ```bash
-# Start bridge, NGINX RTMP server, and stunnel for RTMPS
+# Start full stack: stunnel + NGINX RTMP + bridge
 docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f webrtc-rtmp-bridge
 ```
 
-The Docker setup includes:
-- **Stunnel**: TLS proxy for RTMPS forwarding (Facebook, YouTube on port 443)
-- **NGINX RTMP**: Local RTMP server with stats at http://localhost:8080/stat
-- **WebRTC Bridge**: Python bridge for receiving WebRTC streams
+## RTMPS Streaming (Facebook, YouTube)
 
-**RTMPS Support via Stunnel:**
-
-The stack now supports RTMPS! Stream format in your dashboard:
+The Docker stack provides RTMPS support via stunnel:
 
 **Facebook Live:**
 ```
@@ -81,57 +97,67 @@ python main.py --peerjs --rtmp-url rtmp://localhost:1935/live/stream
 **Options:**
 - `--peer-id YOUR_ID`: Use custom Peer ID (optional, random by default)
 - `--peerjs-host`: PeerJS server host (default: 0.peerjs.com)
-- `--peerjs-port`: PeerJS server port (default: 443)
 
-**Example with custom PeerJS server:**
-```bash
-python main.py --peerjs --peerjs-host your-server.com --peerjs-port 9000 --peer-id my-receiver
+**Facebook Live (with RTMPS):**
+```
+rtmp://nginx-rtmp:1935/facebook/FB-YOUR-STREAM-KEY
 ```
 
-### 2. Manual Mode (File-based)
-
-```bash
-# Save offer to file
-python main.py --rtmp-url rtmp://localhost:1935/live/stream --offer-file offer.json
+**YouTube (with RTMPS):**
+```
+rtmp://nginx-rtmp:1935/youtube/YOUR-STREAM-KEY
 ```
 
-### 3. Manual Mode (Pipe)
-
-```bash
-# Pipe offer from stdin
-cat offer.json | python main.py --rtmp-url rtmp://localhost:1935/live/stream
+**Twitch (direct RTMP):**
+```
+rtmp://live.twitch.tv/app/YOUR-STREAM-KEY
 ```
 
-## Data Channel Control
+### Traffic Flow (RTMPS)
+```
+Browser → WebRTC Bridge → NGINX RTMP → stunnel → Facebook/YouTube (port 443)
+```
 
-Control the bridge remotely via WebRTC data channels. See [DATA_CHANNEL_API.md](DATA_CHANNEL_API.md) for full API documentation.
+## Data Channel API
 
-**Available Commands:**
+Control the bridge in real-time via WebRTC data channels:
 
+### Start Recording
 ```javascript
-// Start recording
-conn.send(JSON.stringify({action: "start"}));
+dataChannel.send(JSON.stringify({ action: "start" }));
+// Response: { status: "ok", action: "start", urls: [...] }
+```
 
-// Stop recording
-conn.send(JSON.stringify({action: "stop"}));
+### Stop Recording
+```javascript
+dataChannel.send(JSON.stringify({ action: "stop" }));
+```
 
-// Add RTMP URL (multistreaming)
-conn.send(JSON.stringify({
+### Add RTMP Destination
+```javascript
+dataChannel.send(JSON.stringify({
   action: "add_url",
   url: "rtmp://live.twitch.tv/app/YOUR_KEY"
 }));
+```
 
-// Remove RTMP URL
-conn.send(JSON.stringify({
+### Remove RTMP Destination
+```javascript
+dataChannel.send(JSON.stringify({
   action: "remove_url",
   url: "rtmp://server.com/live/stream"
 }));
+```
 
-// Get status
-conn.send(JSON.stringify({action: "status"}));
+### Get Status
+```javascript
+dataChannel.send(JSON.stringify({ action: "status" }));
+// Response: { status: "ok", recording: true, urls: [...], tracks: 2 }
+```
 
-// List URLs
-conn.send(JSON.stringify({action: "list_urls"}));
+### List URLs
+```javascript
+dataChannel.send(JSON.stringify({ action: "list_urls" }));
 ```
 
 ## Multistreaming Example
@@ -139,30 +165,52 @@ conn.send(JSON.stringify({action: "list_urls"}));
 Stream to multiple platforms simultaneously:
 
 ```javascript
-const peer = new Peer();
-const conn = peer.connect('your-peer-id');
+// Add destinations
+dataChannel.send(JSON.stringify({
+  action: "add_url",
+  url: "rtmp://a.rtmp.youtube.com/live2/YOUTUBE_KEY"
+}));
 
-conn.on('open', () => {
-  // Add multiple destinations
-  conn.send(JSON.stringify({
-    action: "add_url",
-    url: "rtmp://a.rtmp.youtube.com/live2/YOUR_KEY"
-  }));
-  
-  conn.send(JSON.stringify({
-    action: "add_url",
-    url: "rtmp://live.twitch.tv/app/YOUR_KEY"
-  }));
-  
-  // Start streaming to all
-  conn.send(JSON.stringify({action: "start"}));
-});
+dataChannel.send(JSON.stringify({
+  action: "add_url",
+  url: "rtmp://live.twitch.tv/app/TWITCH_KEY"
+}));
+
+// Start streaming to all destinations
+dataChannel.send(JSON.stringify({ action: "start" }));
 ```
 
-## Testing the Stream
+## Command Line Options
 
-View the RTMP stream:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--peerjs` | Enable PeerJS signaling mode | Off |
+| `--peer-id` | Custom Peer ID | Random UUID |
+| `--peerjs-host` | PeerJS server host | `0.peerjs.com` |
+| `--peerjs-port` | PeerJS server port | `443` |
+| `--rtmp-url` | Initial RTMP destination (optional) | None |
+| `--offer-file` | Path to offer JSON file (manual mode) | None |
 
+## Docker Services
+
+### stunnel
+- **Purpose**: TLS proxy for RTMPS
+- **Ports**: 1936 (Facebook), 1937 (YouTube)
+- **Config**: `stunnel.conf`
+
+### nginx-rtmp
+- **Purpose**: RTMP server and router
+- **Ports**: 1935 (RTMP), 8080 (stats)
+- **Stats**: http://localhost:8080/stat
+
+### webrtc-rtmp-bridge
+- **Purpose**: WebRTC receiver
+- **Mode**: PeerJS signaling
+- **Depends on**: nginx-rtmp, stunnel
+
+## Testing
+
+### View RTMP Stream
 ```bash
 # Using ffplay
 ffplay rtmp://localhost:1935/live/stream
@@ -171,45 +219,63 @@ ffplay rtmp://localhost:1935/live/stream
 vlc rtmp://localhost:1935/live/stream
 ```
 
-Monitor NGINX RTMP stats: http://localhost:8080/stat
+### Check Docker Logs
+```bash
+# All services
+docker-compose logs -f
 
-## Configuration
-
-### Command Line Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--rtmp-url` | Initial RTMP destination URL | `rtmp://localhost/live/stream` |
-| `--peerjs` | Enable PeerJS signaling mode | Off |
-| `--peer-id` | Custom Peer ID (PeerJS mode) | Random UUID |
-| `--peerjs-host` | PeerJS server host | `0.peerjs.com` |
-| `--peerjs-port` | PeerJS server port | `443` |
-| `--offer-file` | Path to offer JSON file (manual mode) | None |
+# Specific service
+docker-compose logs -f webrtc-rtmp-bridge
+```
 
 ## Architecture
 
-### PeerJS Mode
 ```
-Browser → PeerJS Server (WebSocket) → Bridge → RTMP Server(s)
-         ↓                           ↓
-    Media Tracks              Data Channel Control
-```
-
-### Manual Mode
-```
-WebRTC Client → SDP Exchange (File/CLI) → aiortc RTCPeerConnection
-                                          ↓
-                                    Media Tracks
-                                          ↓
-                                   MediaRecorder(s) → RTMP Server(s)
+┌─────────────┐
+│   Browser   │
+│  (Sender)   │
+└──────┬──────┘
+       │ WebRTC (PeerJS)
+       ▼
+┌─────────────────────┐
+│  Python Bridge      │
+│  (aiortc + PyAV)    │
+│  • H.264 6Mbps      │
+│  • AAC 256k         │
+└──────┬──────────────┘
+       │ RTMP
+       ▼
+┌─────────────────────┐      ┌──────────────┐
+│   NGINX RTMP        │─────→│   stunnel    │──→ Facebook :443
+│   (router)          │      │   (TLS)      │──→ YouTube :443
+└─────────────────────┘      └──────────────┘
+       │
+       └──→ Direct RTMP (Twitch, etc.)
 ```
 
 ## Requirements
 
 - Python 3.11+
-- aiortc, aiohttp, av (PyAV), websockets
-- ffmpeg/libav system libraries
-- RTMP server (NGINX included in Docker setup)
+- aiortc, PyAV, websockets
+- ffmpeg/libav (system libraries)
+- Docker & Docker Compose (for RTMPS)
+
+## Troubleshooting
+
+### "Blocked plain RTMP" Error
+Facebook requires RTMPS. Use Docker with stunnel or direct port 80:
+```
+rtmp://live-api-s.facebook.com:80/rtmp/YOUR_KEY
+```
+
+### Connection Refused
+Ensure NGINX RTMP is running:
+```bash
+docker-compose ps nginx-rtmp
+```
+
+### No Video/Audio Tracks
+Check browser console - media stream must include tracks before connecting.
 
 ## Development
 
