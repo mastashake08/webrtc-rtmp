@@ -36,8 +36,15 @@ class WebRTCReceiver:
         
         @self.pc.on("track")
         async def on_track(track):
-            logger.info(f"Receiving {track.kind} track")
+            logger.info(f"✓ Receiving {track.kind} track (total tracks: {len(self.tracks) + 1})")
             self.tracks.append(track)
+            
+            # Notify frontend about track
+            self.send_response({
+                "status": "ok",
+                "message": f"Receiving {track.kind} track",
+                "tracks": len(self.tracks)
+            })
             
             # If recording is already started, add track to active recorders
             if self.recording_started:
@@ -94,6 +101,7 @@ class WebRTCReceiver:
             elif action == "add_url":
                 url = cmd.get("url")
                 if url:
+                    url = url.strip()  # Remove leading/trailing whitespace
                     await self.add_rtmp_url(url)
                     self.send_response({"status": "ok", "action": "add_url", "url": url})
                 else:
@@ -102,6 +110,7 @@ class WebRTCReceiver:
             elif action == "remove_url":
                 url = cmd.get("url")
                 if url:
+                    url = url.strip()  # Remove leading/trailing whitespace
                     await self.remove_rtmp_url(url)
                     self.send_response({"status": "ok", "action": "remove_url", "url": url})
                 else:
@@ -136,6 +145,7 @@ class WebRTCReceiver:
     
     async def add_rtmp_url(self, url):
         """Add a new RTMP URL for multistreaming"""
+        url = url.strip()  # Ensure no whitespace
         if url not in self.rtmp_urls:
             self.rtmp_urls.append(url)
             logger.info(f"Added RTMP URL: {url}")
@@ -163,21 +173,40 @@ class WebRTCReceiver:
     async def _start_recorder(self, url):
         """Start a single recorder for a URL"""
         try:
+            logger.info(f"Attempting to connect to: {url}")
+            
+            # Validate URL format
+            if not url.startswith('rtmp://'):
+                raise ValueError(f"Invalid RTMP URL format: {url}")
+            
             recorder = MediaRecorder(url, format='flv', options={
                 'max_interleave_delta': '0',
                 'fflags': '+genpts',
+                'rtmp_buffer': '100',
+                'rtmp_live': 'live',
             })
             
             # Add all existing tracks
             for track in self.tracks:
                 recorder.addTrack(track)
+                logger.info(f"Added {track.kind} track to recorder for {url}")
+            
+            if not self.tracks:
+                logger.warning(f"⚠️  No tracks available to record for {url}")
+                self.send_response({"status": "error", "message": "No media tracks available"})
+                return
             
             await recorder.start()
             self.recorders[url] = recorder
             logger.info(f"✓ Started recording to {url}")
+            self.send_response({"status": "ok", "message": f"Recording started to {url}"})
             
+        except FileNotFoundError as e:
+            error_msg = f"Cannot connect to RTMP server at {url}. Make sure the server is running and accessible."
+            logger.error(f"✗ {error_msg}: {e}")
+            self.send_response({"status": "error", "message": error_msg})
         except Exception as e:
-            logger.error(f"✗ Failed to start recorder for {url}: {e}")
+            logger.error(f"✗ Failed to start recorder for {url}: {e}", exc_info=True)
             self.send_response({"status": "error", "message": f"Failed to start {url}: {str(e)}"})
     
     async def start_recording(self):
