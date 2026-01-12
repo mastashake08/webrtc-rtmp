@@ -254,12 +254,29 @@ class WebRTCReceiver:
     async def add_ice_candidate(self, candidate_data):
         """Add ICE candidate"""
         if candidate_data:
-            # aiortc expects the full candidate dict with sdp, sdpMid, sdpMLineIndex
-            # Create a minimal candidate object that aiortc can use
+            from aiortc.sdp import candidate_from_sdp
+            
             try:
-                await self.pc.addIceCandidate(candidate_data)
+                # Parse the candidate string into an RTCIceCandidate
+                candidate_str = candidate_data.get("candidate", "")
+                sdp_mid = candidate_data.get("sdpMid")
+                sdp_mline_index = candidate_data.get("sdpMLineIndex")
+                
+                if candidate_str:
+                    # Remove "candidate:" prefix if present
+                    if candidate_str.startswith("candidate:"):
+                        candidate_str = candidate_str[10:]
+                    
+                    # Parse using aiortc's SDP parser
+                    candidate = candidate_from_sdp(candidate_str)
+                    candidate.sdpMid = sdp_mid
+                    candidate.sdpMLineIndex = sdp_mline_index
+                    
+                    await self.pc.addIceCandidate(candidate)
+                    logger.debug(f"Added ICE candidate: {candidate.type}")
             except Exception as e:
-                logger.debug(f"Failed to add ICE candidate: {e}")
+                # ICE candidates are best-effort, connection may work without all of them
+                logger.debug(f"Skipping ICE candidate: {e}")
             
     async def close(self):
         """Close connections"""
