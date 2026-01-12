@@ -254,13 +254,12 @@ class WebRTCReceiver:
     async def add_ice_candidate(self, candidate_data):
         """Add ICE candidate"""
         if candidate_data:
-            from aiortc import RTCIceCandidate
-            candidate = RTCIceCandidate(
-                candidate=candidate_data.get("candidate"),
-                sdpMid=candidate_data.get("sdpMid"),
-                sdpMLineIndex=candidate_data.get("sdpMLineIndex")
-            )
-            await self.pc.addIceCandidate(candidate)
+            # aiortc expects the full candidate dict with sdp, sdpMid, sdpMLineIndex
+            # Create a minimal candidate object that aiortc can use
+            try:
+                await self.pc.addIceCandidate(candidate_data)
+            except Exception as e:
+                logger.debug(f"Failed to add ICE candidate: {e}")
             
     async def close(self):
         """Close connections"""
@@ -327,8 +326,8 @@ async def main_peerjs(rtmp_url, peer_id=None, peerjs_host="0.peerjs.com", peerjs
         # Keep running until interrupted
         while receiver.pc.connectionState != "closed":
             await asyncio.sleep(1)
-            # Exit if all tracks ended
-            if len(receiver.tracks) == 0 and receiver.recording_started is False and receiver.recorder is not None:
+            # Exit if all tracks ended and recorders stopped
+            if len(receiver.tracks) == 0 and receiver.recording_started is False and len(receiver.recorders) > 0:
                 logger.info("Stream ended")
                 break
                 
