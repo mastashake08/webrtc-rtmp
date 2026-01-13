@@ -27,4 +27,4 @@ COPY main.py .
 COPY peerjs_client.py .
 
 # Run the application
-CMD ["python", "main.py"]
+CMD ["python", "main.py", "--peerjs"]
