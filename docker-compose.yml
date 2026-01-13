@@ -4,9 +4,14 @@ services:
   # Stunnel for RTMPS (RTMP over TLS) forwarding
   stunnel:
     image: dweomer/stunnel
+    platform: linux/amd64
     container_name: stunnel-rtmps
     volumes:
       - ./stunnel.conf:/etc/stunnel/stunnel.conf:ro
+    environment:
+      - STUNNEL_SERVICE=facebook
+      - STUNNEL_ACCEPT=1936
+      - STUNNEL_CONNECT=live-api-s.facebook.com:443
     networks:
       - rtmp-network
     restart: unless-stopped
@@ -14,6 +19,7 @@ services:
   # NGINX RTMP server with stunnel forwarding
   nginx-rtmp:
     image: tiangolo/nginx-rtmp
+    platform: linux/amd64
     container_name: nginx-rtmp
     ports:
       - "1935:1935"  # RTMP input from WebRTC bridge
@@ -28,7 +34,9 @@ services:
 
   # WebRTC to RTMP bridge
   webrtc-rtmp-bridge:
-    build: .
+    build:
+      context: .
+    platform: linux/arm64
     container_name: webrtc-rtmp-bridge
     stdin_open: true
     tty: true
