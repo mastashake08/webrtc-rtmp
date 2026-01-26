@@ -175,15 +175,24 @@ class WebRTCReceiver:
         try:
             logger.info(f"Attempting to connect to: {url}")
             logger.info(f"Available tracks: {len(self.tracks)}")
+            
+            # Log track details to see actual resolutions
             for track in self.tracks:
                 logger.info(f"  - Track: {track.kind} (id: {track.id})")
+                if track.kind == 'video':
+                    # Try to get video frame to determine actual resolution
+                    try:
+                        frame = await track.recv()
+                        logger.info(f"    Video frame size: {frame.width}x{frame.height}")
+                    except Exception as e:
+                        logger.warning(f"    Could not read video frame: {e}")
             
             # Validate URL format
             if not url.startswith('rtmp://'):
                 raise ValueError(f"Invalid RTMP URL format: {url}")
             
             # High-quality encoding options for RTMP/FLV
-            # For constant bitrate streaming, use CRF with target bitrate constraints
+            # Let the encoder auto-detect video resolution from incoming frames
             logger.info(f"Creating MediaRecorder with FLV format...")
             recorder = MediaRecorder(url, format='flv', options={
                 # Video encoding (H.264) - x264 codec options
@@ -197,7 +206,7 @@ class WebRTCReceiver:
                 'profile': 'high',              # H.264 High Profile
                 'level': '4.1',                 # H.264 Level 4.1
                 
-                # Audio encoding (AAC) - aac codec options  
+                # Audio encoding (AAC) - high quality with proper resampling
                 'audio_bitrate': '256000',      # Audio bitrate in bits/sec (256 kbps)
                 'ar': '48000',                  # 48kHz sample rate
                 'ac': '2',                      # Stereo audio
