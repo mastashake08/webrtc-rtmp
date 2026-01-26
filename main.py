@@ -174,48 +174,50 @@ class WebRTCReceiver:
         """Start a single recorder for a URL"""
         try:
             logger.info(f"Attempting to connect to: {url}")
+            logger.info(f"Available tracks: {len(self.tracks)}")
+            for track in self.tracks:
+                logger.info(f"  - Track: {track.kind} (id: {track.id})")
             
             # Validate URL format
             if not url.startswith('rtmp://'):
                 raise ValueError(f"Invalid RTMP URL format: {url}")
             
             # High-quality encoding options for RTMP/FLV
-            # FLV is still the standard for RTMP, but we optimize for quality
+            # For constant bitrate streaming, use CRF with target bitrate constraints
+            logger.info(f"Creating MediaRecorder with FLV format...")
             recorder = MediaRecorder(url, format='flv', options={
-                # Video encoding (H.264)
-                'preset': 'veryfast',           # Balance speed/quality (veryfast, faster, fast, medium, slow)
+                # Video encoding (H.264) - x264 codec options
+                'preset': 'veryfast',           # Balance speed/quality
                 'tune': 'zerolatency',          # Optimize for live streaming
-                'video_bitrate': '6000k',       # 6 Mbps for high quality
-                'maxrate': '6000k',
-                'bufsize': '12000k',            # 2x bitrate for buffer
-                'g': '60',                      # GOP size (keyframe interval)
+                'crf': '23',                    # Constant Rate Factor (18-28 range, lower=better)
+                'maxrate': '6000k',             # Max bitrate cap
+                'bufsize': '12000k',            # 2x maxrate for buffer
+                'g': '60',                      # GOP size (keyframe every 2 seconds at 30fps)
                 'bf': '0',                      # No B-frames for lower latency
-                'profile:v': 'high',            # H.264 High Profile
-                'level': '4.1',                 # H.264 Level 4.1 (supports 1080p@30fps)
+                'profile': 'high',              # H.264 High Profile
+                'level': '4.1',                 # H.264 Level 4.1
                 
-                # Audio encoding (AAC)
-                'audio_bitrate': '256k',        # High quality audio
+                # Audio encoding (AAC) - aac codec options  
+                'audio_bitrate': '256000',      # Audio bitrate in bits/sec (256 kbps)
                 'ar': '48000',                  # 48kHz sample rate
-                
-                # Container/muxer options
-                'max_interleave_delta': '0',
-                'fflags': '+genpts',
-                'rtmp_buffer': '1000',          # Larger buffer for stability
-                'rtmp_live': 'live',
-                'rtmp_playpath': 'live',
+                'ac': '2',                      # Stereo audio
             })
+            logger.info(f"MediaRecorder created successfully")
             
             # Add all existing tracks
             for track in self.tracks:
+                logger.info(f"Adding {track.kind} track to recorder...")
                 recorder.addTrack(track)
-                logger.info(f"Added {track.kind} track to recorder for {url}")
+                logger.info(f"✓ Added {track.kind} track to recorder for {url}")
             
             if not self.tracks:
                 logger.warning(f"⚠️  No tracks available to record for {url}")
                 self.send_response({"status": "error", "message": "No media tracks available"})
                 return
             
+            logger.info(f"Starting recorder...")
             await recorder.start()
+            logger.info(f"Recorder started successfully")
             self.recorders[url] = recorder
             logger.info(f"✓ Started recording to {url}")
             self.send_response({"status": "ok", "message": f"Recording started to {url}"})
