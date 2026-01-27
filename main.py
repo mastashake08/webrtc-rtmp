@@ -7,8 +7,16 @@ from aiortc.contrib.media import MediaRecorder
 import argparse
 from peerjs_client import PeerJSClient
 
-logging.basicConfig(level=logging.DEBUG)
+# Configure logging - suppress verbose aiortc internal logs
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Suppress noisy aiortc internal logging
+logging.getLogger('aiortc').setLevel(logging.WARNING)
+logging.getLogger('aioice').setLevel(logging.WARNING)
+logging.getLogger('av').setLevel(logging.WARNING)
+logging.getLogger('peerjs_client').setLevel(logging.WARNING)
 
 
 class WebRTCReceiver:
@@ -193,9 +201,17 @@ class WebRTCReceiver:
             
             # MediaRecorder will transcode WebRTC (VP8/Opus) to RTMP (H.264/AAC)
             logger.info(f"Creating MediaRecorder with FLV format...")
+            # PyAV/ffmpeg options - use correct parameter names
             options = {
-                'video_bitrate': '12000k',  # Video quality (12 Mbps for 4K)
-                'audio_bitrate': '192k',    # Audio quality (192 kbps)
+                'video': {
+                    'bit_rate': 6000000,       # 6 Mbps for 1080p60
+                    'codec': 'libx264',
+                    'preset': 'veryfast',
+                },
+                'audio': {
+                    'bit_rate': 192000,        # 192 kbps in bits/sec
+                    'codec': 'aac',
+                }
             }
             recorder = MediaRecorder(url, format='flv', options=options)
             logger.info(f"MediaRecorder created successfully")
