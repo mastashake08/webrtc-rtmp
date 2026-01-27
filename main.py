@@ -194,8 +194,8 @@ class WebRTCReceiver:
             # MediaRecorder will transcode WebRTC (VP8/Opus) to RTMP (H.264/AAC)
             logger.info(f"Creating MediaRecorder with FLV format...")
             options = {
-                'video_bitrate': '4500k',   # Video quality (4.5 Mbps)
-                'audio_bitrate': '128k',    # Audio quality (128 kbps)
+                'video_bitrate': '12000k',  # Video quality (12 Mbps for 4K)
+                'audio_bitrate': '192k',    # Audio quality (192 kbps)
             }
             recorder = MediaRecorder(url, format='flv', options=options)
             logger.info(f"MediaRecorder created successfully")
